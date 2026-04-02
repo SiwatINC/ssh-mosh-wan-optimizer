@@ -1,11 +1,14 @@
 # SSH ↔ MOSH WAN Gateway — example configuration
 # Copy to config.yaml and adjust; or use environment variables instead.
 #
-# Authentication model
-# --------------------
-# The SSH login username IS the remote username — no separate remote_user setting.
-# Authentication to the remote server is passed through from the local SSH client
-# via SSH agent forwarding.  Always connect with:  ssh -A user@gateway -p 2222
+# Security model
+# --------------
+# The remote target is FIXED here.  Dynamic routing is disabled — clients
+# cannot connect to arbitrary hosts through this gateway.
+#
+# The SSH login username becomes the remote username.
+# Authentication to the remote is passed through via the client's SSH agent.
+# Always connect with:  ssh -A user@gateway -p 2222
 
 # ── SSH server (local clients → gateway) ─────────────────────────────────────
 host: "0.0.0.0"
@@ -28,24 +31,13 @@ authorized_keys_path: "/keys/authorized_keys"
 #   alice: "s3cr3t"
 #   bob: "p4ssw0rd"
 
-# Dev / trusted-LAN only
+# Dev / trusted-LAN only — never enable in production
 # accept_any_key: false
 
-# ── Remote MOSH target ────────────────────────────────────────────────────────
-# Fixed target (same remote host for all clients):
-default_remote_host: "my-server.example.com"
-default_remote_port: 22
-
-# Dynamic routing: leave default_remote_host blank and use SSH username format:
-#   ssh -A -p 2222 "alice@10.0.0.1"@gateway
-#   ssh -A -p 2222 "alice@10.0.0.1:22"@gateway
-
-# ── Gateway → Remote authentication ──────────────────────────────────────────
-# No key configuration required.
-# The client's SSH agent is forwarded through the gateway to the remote server.
-# Ensure the client connects with agent forwarding:  ssh -A ...
+# ── Fixed remote MOSH target  (REQUIRED) ─────────────────────────────────────
+remote_host: "my-server.example.com"    # required — only host clients can reach
+remote_port: 22
 
 # ── Remote host-key verification ─────────────────────────────────────────────
-# remote_known_hosts: "/keys/known_hosts"   # path to a known_hosts file
-#                                            # default: system ~/.ssh/known_hosts
-# remote_ignore_host_key: false             # true = skip verification (insecure)
+# remote_known_hosts: "/keys/known_hosts"    # recommended: pin the remote host key
+# remote_ignore_host_key: false              # true = skip verification (insecure)

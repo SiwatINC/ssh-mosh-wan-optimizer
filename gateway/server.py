@@ -1,18 +1,21 @@
 """
 AsyncSSH server that accepts local SSH client connections and bridges them
-to remote servers via MOSH.
+to a single, fixed remote server via MOSH.
 
-Authentication pass-through model
-----------------------------------
-  • The SSH login username becomes the remote username.
-  • The client's SSH agent is forwarded and used to authenticate to the
-    remote server — the gateway holds no keys of its own.
+Security model
+--------------
+  • The remote target (host + port) is FIXED at startup.  Clients cannot
+    redirect connections to arbitrary hosts.
+  • SSH usernames are validated against a strict allowlist pattern
+    ([a-zA-Z0-9._-]{1,64}) and rejected immediately on mismatch.
+  • Authentication to the remote server is passed through via the client's
+    forwarded SSH agent — the gateway holds no credentials of its own.
   • Connect from your local machine with:  ssh -A user@gateway -p 2222
 
-Client → Gateway authentication modes (pick one):
+Client → Gateway authentication modes (configure exactly one):
   • Public key  (authorized_keys file or inline content)  — recommended
   • Password    (user:password pairs in config)
-  • Accept-any  (skip validation)                         — dev / trusted LAN only
+  • Accept-any  (no validation)                           — dev / trusted LAN only
 """
 
 import asyncio
@@ -54,7 +57,25 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     # ------------------------------------------------------------------
 
     def begin_auth(self, username: str) -> bool:
-        return True  # always require authentication
+        """
+        Called before any auth method is tried.
+
+        Immediately disconnect clients that supply an invalid username —
+        before they get to attempt any authentication.
+        """
+        if not GatewayConfig.is_valid_username(username):
+            peer = self._conn.get_extra_info("peername") if self._conn else "unknown"
+            logger.warning(
+                "Disconnecting %s: invalid username %r (must match [a-zA-Z0-9._-]{1,64})",
+                peer,
+                username,
+            )
+            if self._conn:
+                self._conn.disconnect(
+                    asyncssh.DISC_ILLEGAL_USER_NAME,
+                    "Invalid username format",
+                )
+        return True  # always require auth
 
     # --- Public key ---
 
@@ -62,6 +83,10 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         return True
 
     def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
+        # Defence-in-depth: re-check username even though begin_auth already did.
+        if not GatewayConfig.is_valid_username(username):
+            return False
+
         if self._config.accept_any_key:
             logger.warning(
                 "GATEWAY_ACCEPT_ANY_KEY=true — accepting key for '%s' without validation",
@@ -78,7 +103,7 @@ class _GatewaySSHServer(asyncssh.SSHServer):
 
         try:
             auth_keys = asyncssh.import_authorized_keys(auth_keys_text)
-            # validate() returns None on success, an exception reason string on failure
+            # validate() returns None on success, a reason string on failure
             if auth_keys.validate(key, username) is None:
                 logger.info("Public key accepted for '%s'", username)
                 return True
@@ -94,6 +119,9 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         return self._config.password_auth
 
     def validate_password(self, username: str, password: str) -> bool:
+        if not GatewayConfig.is_valid_username(username):
+            return False
+
         expected = self._config.passwords.get(username)
         if expected is not None and expected == password:
             logger.info("Password auth accepted for '%s'", username)
@@ -108,7 +136,8 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     def session_requested(self) -> asyncssh.SSHServerSession:
         assert self._conn is not None
         username = self._conn.get_extra_info("username", "")
-        logger.info("Session requested by '%s'", username)
+        logger.info("Session opened: user='%s' target=%s:%d",
+                    username, self._config.remote_host, self._config.remote_port)
         return self._session_factory(username)
 
 
@@ -118,16 +147,16 @@ class _GatewaySSHServer(asyncssh.SSHServer):
 
 
 async def run_gateway(config: GatewayConfig) -> None:
-    """Start the SSH gateway and run forever."""
+    """
+    Start the SSH gateway and run forever.
+
+    ``config.remote_host`` must be set; ``GatewayConfig.__init__`` already
+    raises ``ConfigError`` if it is missing, so we just assert here.
+    """
+    assert config.remote_host, "remote_host must be set before calling run_gateway()"
 
     def session_factory(ssh_username: str) -> GatewaySession:
-        try:
-            remote_user, remote_host, remote_port = config.parse_destination(ssh_username)
-        except ValueError as exc:
-            logger.error("Destination parse error for '%s': %s", ssh_username, exc)
-            # Return a session that will immediately report the error
-            remote_user, remote_host, remote_port = ssh_username, "", config.default_remote_port
-
+        remote_user, remote_host, remote_port = config.get_remote_destination(ssh_username)
         return GatewaySession(
             remote_host=remote_host,
             remote_user=remote_user,
@@ -144,17 +173,12 @@ async def run_gateway(config: GatewayConfig) -> None:
         port=config.port,
         server_host_keys=[host_key],
         encoding=None,          # raw bytes in sessions
-        agent_forwarding=True,  # tell asyncssh to handle agent-forwarding requests
+        agent_forwarding=True,  # handle agent-forwarding channel requests
     )
 
     logger.info("SSH↔MOSH gateway listening on %s:%d", config.host, config.port)
-    logger.info(
-        "Authentication: passed through via client SSH agent (ssh -A ...)"
-    )
-    if config.default_remote_host:
-        logger.info("Default target: *@%s:%d", config.default_remote_host, config.default_remote_port)
-    else:
-        logger.info("Dynamic routing: SSH username format 'user@remotehost[:port]'")
+    logger.info("Fixed remote target: %s:%d", config.remote_host, config.remote_port)
+    logger.info("Auth: client SSH agent forwarded to remote (ssh -A ...)")
 
     async with server:
         await asyncio.get_event_loop().create_future()  # run forever
