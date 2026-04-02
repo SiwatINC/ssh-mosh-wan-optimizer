@@ -96,10 +96,14 @@ class _GatewaySSHServer(asyncssh.SSHServer):
 
         auth_keys_text = self._config.effective_authorized_keys
         if not auth_keys_text:
-            logger.warning(
-                "No authorized_keys configured; rejecting public-key auth for '%s'", username
+            # No local authorized_keys configured: delegate entirely to the remote.
+            # The client's agent will be used to authenticate to the remote server;
+            # if the remote rejects it the MOSH bootstrap fails and the session ends.
+            logger.info(
+                "No local authorized_keys — accepting key for '%s', remote server is the auth gate",
+                username,
             )
-            return False
+            return True
 
         try:
             auth_keys = asyncssh.import_authorized_keys(auth_keys_text)

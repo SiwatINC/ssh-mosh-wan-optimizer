@@ -16,23 +16,28 @@ port: 2222
 host_key_path: "/etc/gateway/host_key"   # auto-generated if missing
 
 # ── Client → Gateway authentication ──────────────────────────────────────────
-
-# Option A: authorized_keys file  (recommended)
-authorized_keys_path: "/keys/authorized_keys"
-
-# Option B: inline authorized_keys text
+#
+# Option A: no authorized_keys configured  (zero-config, recommended default)
+#   The gateway accepts any client public key and delegates auth to the remote:
+#   the client's forwarded agent must satisfy the remote server's authorized_keys.
+#   No separate key management on the gateway needed.
+#
+# Option B: local authorized_keys file  (pre-screen before hitting the remote)
+# authorized_keys_path: "/keys/authorized_keys"
+#
+# Option C: inline authorized_keys text
 # authorized_keys_content: |
 #   ssh-ed25519 AAAA... alice@laptop
 #   ssh-ed25519 AAAA... bob@desktop
-
-# Option C: password authentication
+#
+# Option D: password authentication
 # password_auth: true
 # passwords:
 #   alice: "s3cr3t"
 #   bob: "p4ssw0rd"
-
+#
 # Dev / trusted-LAN only — never enable in production
-# accept_any_key: false
+# accept_any_key: true
 
 # ── Fixed remote MOSH target  (REQUIRED) ─────────────────────────────────────
 remote_host: "my-server.example.com"    # required — only host clients can reach

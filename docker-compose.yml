@@ -19,13 +19,14 @@ services:
       REMOTE_PORT: "22"
 
       # ── Client → Gateway auth ──────────────────────────────────────
-      # Recommended: place your public key(s) in ./keys/authorized_keys
-      GATEWAY_AUTHORIZED_KEYS_PATH: "/keys/authorized_keys"
-
-      # Alternative: inline authorized_keys text
+      # Leave unset to delegate auth to the remote server (zero-config):
+      # the client's forwarded agent must satisfy the remote's authorized_keys.
+      #
+      # Set to pre-screen clients before they reach the remote:
+      # GATEWAY_AUTHORIZED_KEYS_PATH: "/keys/authorized_keys"
       # GATEWAY_AUTHORIZED_KEYS_CONTENT: "ssh-ed25519 AAAA... user@host"
-
-      # Password auth (optional, in addition to or instead of keys)
+      #
+      # Password auth (optional)
       # GATEWAY_PASSWORD_AUTH: "true"
       # GATEWAY_PASSWORDS: "alice:s3cr3t,bob:p4ss"
 

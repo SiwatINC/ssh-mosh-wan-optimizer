@@ -27,9 +27,15 @@ class GatewayConfig:
 
     Client → Gateway authentication
     --------------------------------
-    GATEWAY_AUTHORIZED_KEYS_PATH    Path to an authorized_keys file
-    GATEWAY_AUTHORIZED_KEYS_CONTENT Raw authorized_keys text (newline-separated)
-    GATEWAY_ACCEPT_ANY_KEY          "true" to accept any client public key
+    GATEWAY_AUTHORIZED_KEYS_PATH    Path to an authorized_keys file  (optional)
+    GATEWAY_AUTHORIZED_KEYS_CONTENT Raw authorized_keys text          (optional)
+
+      If neither is set the gateway accepts any client public key and delegates
+      authentication entirely to the remote server: the client's forwarded agent
+      must satisfy the remote's own authorized_keys.  This is the zero-config
+      path — no separate key management needed on the gateway.
+
+    GATEWAY_ACCEPT_ANY_KEY          "true" — same as above but explicit
                                     (dev / trusted LAN only — never in production)
     GATEWAY_PASSWORD_AUTH           "true" to also allow password authentication
     GATEWAY_PASSWORDS               Comma-separated user:password pairs
