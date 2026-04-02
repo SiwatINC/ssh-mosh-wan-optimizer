@@ -63,9 +63,11 @@ All settings can be provided as environment variables, a YAML file (`--config co
 
 ### Client → Gateway authentication
 
+By default the gateway fetches `~/.ssh/authorized_keys` from the remote server for each connecting user and validates against those — no separate key management needed on the gateway.
+
 | Variable | Default | Description |
 |---|---|---|
-| `GATEWAY_AUTHORIZED_KEYS_PATH` | — | Path to an `authorized_keys` file. If unset, any key is accepted and the remote is the auth gate. |
+| `GATEWAY_AUTHORIZED_KEYS_PATH` | — | Local `authorized_keys` override (takes precedence over remote key store). |
 | `GATEWAY_AUTHORIZED_KEYS_CONTENT` | — | Inline `authorized_keys` text (alternative to the path). |
 | `GATEWAY_PASSWORD_AUTH` | `false` | Also accept password authentication. |
 | `GATEWAY_PASSWORDS` | — | Comma-separated `user:password` pairs, e.g. `alice:s3cr3t,bob:pass`. |
@@ -95,8 +97,9 @@ All settings can be provided as environment variables, a YAML file (`--config co
              │
              │  SSH public-key auth
              ▼
-2. Gateway:  Validates key against GATEWAY_AUTHORIZED_KEYS_PATH
-             (or accepts any key and delegates to remote if unset)
+2. Gateway:  Fetches ~/.ssh/authorized_keys from remote for "alice"
+             (via gateway key, cached 60s) and validates the presented key
+             — or uses local GATEWAY_AUTHORIZED_KEYS_PATH if configured
              │
              │  Gateway uses its own key (GATEWAY_SSH_KEY_PATH)
              ▼

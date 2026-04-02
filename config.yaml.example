@@ -17,24 +17,22 @@ host_key_path: "/etc/gateway/host_key"   # auto-generated if missing
 
 # ── Client → Gateway authentication ──────────────────────────────────────────
 #
-# Option A: no authorized_keys configured  (zero-config)
-#   The gateway accepts any client public key; the remote is the effective gate.
+# Default (no config needed): the gateway fetches ~/.ssh/authorized_keys from
+# the remote server for each connecting user and validates against those keys.
+# The remote's key store is the single source of truth — no separate key
+# management on the gateway.
 #
-# Option B: local authorized_keys file  (pre-screen before hitting the remote)
+# Override with a local authorized_keys file (takes precedence if set):
 # authorized_keys_path: "/keys/authorized_keys"
-#
-# Option C: inline authorized_keys text
 # authorized_keys_content: |
 #   ssh-ed25519 AAAA... alice@laptop
-#   ssh-ed25519 AAAA... bob@desktop
 #
-# Option D: password authentication
+# Password authentication (optional):
 # password_auth: true
 # passwords:
 #   alice: "s3cr3t"
-#   bob: "p4ssw0rd"
 #
-# Dev / trusted-LAN only — never enable in production
+# Dev / trusted-LAN only — never enable in production:
 # accept_any_key: true
 
 # ── Fixed remote MOSH target  (REQUIRED) ─────────────────────────────────────
