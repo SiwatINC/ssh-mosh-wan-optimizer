@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Config & secrets
+config.yaml
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_ecdsa
+authorized_keys
+keys/
+
+# Host key (generated at runtime)
+/etc/gateway/
+
+# Logs
+*.log
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

@@ -1,0 +1,43 @@
+# SSH ↔ MOSH WAN Gateway — example configuration
+# Copy to config.yaml and adjust; or use environment variables instead.
+
+# ── SSH server (local clients → gateway) ─────────────────────────────────────
+host: "0.0.0.0"          # Bind address
+port: 2222                # SSH listen port
+host_key_path: "/etc/gateway/host_key"   # Auto-generated if missing
+
+# ── Client → Gateway authentication ──────────────────────────────────────────
+
+# Option A: authorized_keys file  (recommended)
+authorized_keys_path: "/keys/authorized_keys"
+
+# Option B: inline authorized_keys text
+# authorized_keys_content: |
+#   ssh-ed25519 AAAA... alice@laptop
+#   ssh-ed25519 AAAA... bob@desktop
+
+# Option C: password authentication
+# password_auth: true
+# passwords:
+#   alice: "s3cr3t"
+#   bob: "p4ssw0rd"
+
+# Dev / trusted-LAN only: accept any client key without validation
+# accept_any_key: false
+
+# ── Remote MOSH target ────────────────────────────────────────────────────────
+# Fixed target for all clients:
+default_remote_host: "my-server.example.com"
+default_remote_port: 22
+default_remote_user: ""   # Leave blank to use the SSH login username as remote user
+
+# Dynamic routing: leave default_remote_host blank and connect as:
+#   ssh "remoteuser@remotehost"@gateway -p 2222
+#   ssh "remoteuser@remotehost:2222"@gateway -p 2222
+
+# ── Gateway → Remote authentication ──────────────────────────────────────────
+# The private key the gateway uses to SSH into the remote server.
+gateway_ssh_key_path: "/keys/id_ed25519"
+
+# Alternative: supply key as base64 (useful for Docker secrets / env vars)
+# gateway_ssh_key_content: "<base64-encoded-private-key>"

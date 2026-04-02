@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  gateway:
+    image: ghcr.io/siwatinc/ssh-mosh-wan-optimizer:latest
+    # Or build locally:
+    # build: .
+    restart: unless-stopped
+    ports:
+      - "2222:2222"         # SSH listen port (change left side to remap on host)
+    volumes:
+      - ./keys:/keys:ro     # Mount your key material here (see README)
+      - gateway-hostkey:/etc/gateway  # Persist the generated host key
+    environment:
+      # ── Remote target ──────────────────────────────────────────────
+      REMOTE_HOST: "my-remote-server.example.com"   # required
+      REMOTE_PORT: "22"
+      REMOTE_USER: ""        # leave blank to use the SSH login username
+
+      # ── Gateway → Remote auth ──────────────────────────────────────
+      GATEWAY_SSH_KEY_PATH: "/keys/id_ed25519"      # private key for remote auth
+
+      # ── Client → Gateway auth ──────────────────────────────────────
+      # Option A: authorized_keys file (recommended)
+      GATEWAY_AUTHORIZED_KEYS_PATH: "/keys/authorized_keys"
+
+      # Option B: inline authorized_keys (newline-separated, set as secret)
+      # GATEWAY_AUTHORIZED_KEYS_CONTENT: "ssh-ed25519 AAAA... user@host"
+
+      # Option C: password auth (also set GATEWAY_PASSWORDS below)
+      # GATEWAY_PASSWORD_AUTH: "true"
+      # GATEWAY_PASSWORDS: "alice:s3cr3t,bob:p4ss"
+
+      # ── Dev / trusted-LAN only ─────────────────────────────────────
+      # GATEWAY_ACCEPT_ANY_KEY: "true"
+
+      GATEWAY_HOST_KEY_PATH: "/etc/gateway/host_key"
+
+volumes:
+  gateway-hostkey:
