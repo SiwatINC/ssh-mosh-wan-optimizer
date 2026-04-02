@@ -165,6 +165,7 @@ async def run_gateway(config: GatewayConfig) -> None:
             remote_host=remote_host,
             remote_user=remote_user,
             remote_port=remote_port,
+            client_key=config.effective_ssh_key,
             known_hosts=config.remote_known_hosts,
             ignore_host_key=config.remote_ignore_host_key,
         )
@@ -177,12 +178,11 @@ async def run_gateway(config: GatewayConfig) -> None:
         port=config.port,
         server_host_keys=[host_key],
         encoding=None,          # raw bytes in sessions
-        agent_forwarding=True,  # handle agent-forwarding channel requests
     )
 
     logger.info("SSH↔MOSH gateway listening on %s:%d", config.host, config.port)
     logger.info("Fixed remote target: %s:%d", config.remote_host, config.remote_port)
-    logger.info("Auth: client SSH agent forwarded to remote (ssh -A ...)")
+    logger.info("Auth: gateway key %s", config.effective_ssh_key or "(none configured — using system keys)")
 
     async with server:
         await asyncio.get_event_loop().create_future()  # run forever

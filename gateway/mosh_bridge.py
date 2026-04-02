@@ -1,7 +1,6 @@
 """
-MOSH bridge: bootstrap mosh-server on the remote via asyncssh (using the
-client's forwarded SSH agent for authentication), then start mosh-client
-locally in a PTY and expose its file descriptor for I/O bridging.
+MOSH bridge: bootstrap mosh-server on the remote via asyncssh, then start
+mosh-client locally in a PTY and expose its file descriptor for I/O bridging.
 """
 
 import asyncio
@@ -19,9 +18,6 @@ import asyncssh
 
 logger = logging.getLogger(__name__)
 
-# asyncssh sentinel: skip remote host-key verification entirely
-_IGNORE_HOST_KEYS = asyncssh.PermissiveMissingHostKeyPolicy
-
 
 class MoshBootstrapError(Exception):
     """Raised when we cannot establish the MOSH connection."""
@@ -31,16 +27,9 @@ class MoshBridge:
     """
     Manages one MOSH client session bridged to a remote SSH server.
 
-    Authentication to the remote server is **passed through** from the
-    local SSH client via its forwarded SSH agent (``agent_path``).
-
     Typical usage::
 
-        bridge = MoshBridge(
-            remote_host="10.0.0.1",
-            remote_user="ubuntu",
-            agent_path="/tmp/ssh-XXXX/agent.1234",   # from chan.get_agent_path()
-        )
+        bridge = MoshBridge("10.0.0.1", "ubuntu", client_key="/etc/gateway/id_ed25519")
         port, key = await bridge.bootstrap()
         master_fd  = bridge.connect(cols=220, rows=50)
         # bridge.master_fd  — PTY fd for bidirectional I/O
@@ -53,16 +42,16 @@ class MoshBridge:
         remote_host: str,
         remote_user: str,
         remote_port: int = 22,
-        agent_path: Optional[str] = None,
+        client_key: Optional[str] = None,   # path to gateway's private key
         known_hosts: Optional[str] = None,
         ignore_host_key: bool = False,
     ):
         self.remote_host = remote_host
         self.remote_user = remote_user
         self.remote_port = remote_port
-        self.agent_path = agent_path
-        self.known_hosts = known_hosts          # path to a known_hosts file, or None → system default
-        self.ignore_host_key = ignore_host_key  # True → accept any remote host key
+        self.client_key = client_key
+        self.known_hosts = known_hosts
+        self.ignore_host_key = ignore_host_key
 
         self.master_fd: Optional[int] = None
         self._process: Optional[subprocess.Popen] = None
@@ -70,74 +59,52 @@ class MoshBridge:
         self._mosh_key: Optional[str] = None
 
     # ------------------------------------------------------------------
-    # Bootstrap via asyncssh (uses the forwarded agent for auth)
+    # Bootstrap
     # ------------------------------------------------------------------
 
     async def bootstrap(self) -> Tuple[int, str]:
         """
-        Open an asyncssh connection to the remote server and start mosh-server.
+        Open an asyncssh connection to the remote and start mosh-server.
         Returns ``(udp_port, mosh_key)``.
-
-        Authentication is performed using the SSH agent reachable at
-        ``self.agent_path`` (the client's forwarded agent socket).
         """
-        if not self.agent_path:
-            raise MoshBootstrapError(
-                "No SSH agent forwarding available.  "
-                "Connect with agent forwarding enabled: ssh -A ..."
-            )
-
         connect_kwargs: dict = {
             "host": self.remote_host,
             "port": self.remote_port,
             "username": self.remote_user,
-            "agent_path": self.agent_path,
         }
+
+        if self.client_key:
+            connect_kwargs["client_keys"] = [self.client_key]
 
         if self.ignore_host_key:
             connect_kwargs["known_hosts"] = None
-            logger.warning(
-                "Remote host-key verification disabled (REMOTE_IGNORE_HOST_KEY=true)"
-            )
+            logger.warning("Remote host-key verification disabled")
         elif self.known_hosts:
             connect_kwargs["known_hosts"] = self.known_hosts
         # else: asyncssh uses system known_hosts by default
 
         logger.info(
-            "Bootstrapping MOSH: %s@%s:%d (agent=%s)",
-            self.remote_user,
-            self.remote_host,
-            self.remote_port,
-            self.agent_path,
+            "Bootstrapping MOSH: %s@%s:%d", self.remote_user, self.remote_host, self.remote_port
         )
 
         try:
             async with asyncssh.connect(**connect_kwargs) as conn:
                 result = await asyncio.wait_for(
-                    conn.run(
-                        "mosh-server new -s -c 256 -l LANG=en_US.UTF-8",
-                        check=False,
-                    ),
+                    conn.run("mosh-server new -s -c 256 -l LANG=en_US.UTF-8", check=False),
                     timeout=30,
                 )
         except asyncio.TimeoutError:
-            raise MoshBootstrapError(
-                f"Timed out waiting for mosh-server on {self.remote_host}"
-            )
+            raise MoshBootstrapError(f"Timed out waiting for mosh-server on {self.remote_host}")
         except asyncssh.DisconnectError as exc:
             raise MoshBootstrapError(f"SSH connection to {self.remote_host} failed: {exc}")
         except asyncssh.PermissionDenied:
             raise MoshBootstrapError(
-                f"Permission denied authenticating to {self.remote_user}@{self.remote_host}.  "
-                "Make sure the forwarded agent holds a key accepted by the remote server."
+                f"Permission denied authenticating to {self.remote_user}@{self.remote_host}. "
+                "Check GATEWAY_SSH_KEY_PATH."
             )
         except Exception as exc:
-            raise MoshBootstrapError(
-                f"Could not connect to {self.remote_host}: {exc}"
-            ) from exc
+            raise MoshBootstrapError(f"Could not connect to {self.remote_host}: {exc}") from exc
 
-        # mosh-server -s prints "MOSH CONNECT <port> <key>" to stdout;
-        # some builds emit it on stderr — search both.
         combined = (result.stdout or "") + (result.stderr or "")
         for line in combined.splitlines():
             line = line.strip()
@@ -158,10 +125,7 @@ class MoshBridge:
     # ------------------------------------------------------------------
 
     def connect(self, cols: int = 80, rows: int = 24) -> int:
-        """
-        Start ``mosh-client`` in a PTY.
-        Returns the master fd; use ``os.read`` / ``os.write`` on it.
-        """
+        """Start ``mosh-client`` in a PTY. Returns the master fd."""
         if self._mosh_port is None or self._mosh_key is None:
             raise RuntimeError("Call bootstrap() before connect()")
 
@@ -176,18 +140,12 @@ class MoshBridge:
 
         self._process = subprocess.Popen(
             ["mosh-client", self.remote_host, str(self._mosh_port)],
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            env=env,
-            close_fds=True,
-            start_new_session=True,
+            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            env=env, close_fds=True, start_new_session=True,
         )
         os.close(slave_fd)
         self.master_fd = master_fd
-        logger.info(
-            "mosh-client started (pid=%d, fd=%d)", self._process.pid, master_fd
-        )
+        logger.info("mosh-client started (pid=%d, fd=%d)", self._process.pid, master_fd)
         return master_fd
 
     # ------------------------------------------------------------------
@@ -195,7 +153,6 @@ class MoshBridge:
     # ------------------------------------------------------------------
 
     def resize(self, cols: int, rows: int) -> None:
-        """Update PTY window size and notify mosh-client via SIGWINCH."""
         if self.master_fd is not None:
             _set_winsize(self.master_fd, rows, cols)
         if self._process is not None:

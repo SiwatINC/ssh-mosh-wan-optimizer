@@ -3,12 +3,10 @@ SSH server session handler.
 
 Each authenticated SSH client session is handled by one GatewaySession
 instance, which:
-  1. Accepts PTY, agent-forwarding, and shell requests from the SSH client.
-  2. Passes the client's forwarded SSH agent through to the remote server
-     for authentication (no gateway-owned keys required).
-  3. Bootstraps a MOSH connection to the remote server.
-  4. Runs mosh-client in a local PTY subprocess.
-  5. Bridges I/O bidirectionally:
+  1. Accepts the PTY and shell requests from the SSH client.
+  2. Bootstraps a MOSH connection to the remote server using the gateway's key.
+  3. Runs mosh-client in a local PTY subprocess.
+  4. Bridges I/O bidirectionally:
        SSH client ←→ asyncssh channel ←→ mosh-client PTY ←→ MOSH/UDP ←→ remote
 """
 
@@ -33,25 +31,21 @@ _BANNER = (
 
 
 class GatewaySession(asyncssh.SSHServerSession):
-    """
-    Bridges one SSH client session to a remote server via MOSH.
-
-    Authentication to the remote server is passed through using the
-    client's forwarded SSH agent (``ssh -A``).  The SSH login username
-    becomes the remote username.
-    """
+    """Bridges one SSH client session to a remote server via MOSH."""
 
     def __init__(
         self,
         remote_host: str,
         remote_user: str,
         remote_port: int = 22,
+        client_key: Optional[str] = None,
         known_hosts: Optional[str] = None,
         ignore_host_key: bool = False,
     ):
         self._remote_host = remote_host
         self._remote_user = remote_user
         self._remote_port = remote_port
+        self._client_key = client_key
         self._known_hosts = known_hosts
         self._ignore_host_key = ignore_host_key
 
@@ -69,29 +63,17 @@ class GatewaySession(asyncssh.SSHServerSession):
         self._chan = chan
         self._loop = asyncio.get_event_loop()
 
-    def pty_requested(
-        self,
-        term_type: str,
-        term_size: tuple,
-        term_modes: dict,
-    ) -> bool:
+    def pty_requested(self, term_type: str, term_size: tuple, term_modes: dict) -> bool:
         self._cols = term_size[0] or 80
         self._rows = term_size[1] or 24
         logger.debug("PTY requested: %s %dx%d", term_type, self._cols, self._rows)
         return True
 
-    def terminal_size_changed(
-        self, width: int, height: int, pixwidth: int, pixheight: int
-    ) -> None:
+    def terminal_size_changed(self, width: int, height: int, pixwidth: int, pixheight: int) -> None:
         self._cols = width or self._cols
         self._rows = height or self._rows
         if self._bridge:
             self._bridge.resize(self._cols, self._rows)
-
-    def agent_forwarding_requested(self) -> bool:
-        """Accept the client's SSH agent so we can pass it through to the remote."""
-        logger.debug("Agent forwarding accepted for %s@%s", self._remote_user, self._remote_host)
-        return True
 
     def shell_requested(self) -> bool:
         return True
@@ -114,7 +96,6 @@ class GatewaySession(asyncssh.SSHServerSession):
                 logger.debug("Write to mosh-client PTY failed: %s", exc)
 
     def eof_received(self) -> None:
-        logger.debug("EOF from SSH client")
         self._cleanup()
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
@@ -127,34 +108,20 @@ class GatewaySession(asyncssh.SSHServerSession):
     # ------------------------------------------------------------------
 
     async def _run(self) -> None:
-        """Pass the client's agent through, bootstrap MOSH, and start I/O bridge."""
         assert self._chan is not None
         assert self._loop is not None
-
-        # Retrieve the forwarded agent socket path that asyncssh set up when
-        # agent_forwarding_requested() returned True.
-        agent_path: Optional[str] = self._chan.get_agent_path()
 
         self._chan.write(_BANNER)
         self._chan.write(
             f"  Connecting to {self._remote_user}@{self._remote_host}"
-            f":{self._remote_port} via MOSH ...\r\n"
+            f":{self._remote_port} via MOSH ...\r\n\r\n"
         )
-        if not agent_path:
-            self._chan.write(
-                "\r\n\x1b[33mWarning:\x1b[0m No SSH agent forwarding detected.\r\n"
-                "  If authentication fails, reconnect with:  ssh -A ...\r\n\r\n"
-            )
-        else:
-            logger.debug("Using forwarded agent: %s", agent_path)
-
-        self._chan.write("\r\n")
 
         bridge = MoshBridge(
             remote_host=self._remote_host,
             remote_user=self._remote_user,
             remote_port=self._remote_port,
-            agent_path=agent_path,
+            client_key=self._client_key,
             known_hosts=self._known_hosts,
             ignore_host_key=self._ignore_host_key,
         )
@@ -174,11 +141,9 @@ class GatewaySession(asyncssh.SSHServerSession):
             self._chan.exit(1)
             return
 
-        # Register a reader so we're notified when mosh-client has output.
         self._loop.add_reader(master_fd, self._on_mosh_readable)
 
     def _on_mosh_readable(self) -> None:
-        """Called by the event loop when mosh-client has data for the SSH client."""
         assert self._bridge is not None
         assert self._chan is not None
         assert self._loop is not None

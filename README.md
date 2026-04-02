@@ -33,10 +33,10 @@ environment:
 docker compose up -d
 ```
 
-Connect from your local machine (agent forwarding required):
+Connect from your local machine:
 
 ```bash
-ssh -A -p 2222 alice@gateway-host
+ssh -p 2222 alice@gateway-host
 ```
 
 ### Run directly
@@ -71,6 +71,13 @@ All settings can be provided as environment variables, a YAML file (`--config co
 | `GATEWAY_PASSWORDS` | — | Comma-separated `user:password` pairs, e.g. `alice:s3cr3t,bob:pass`. |
 | `GATEWAY_ACCEPT_ANY_KEY` | `false` | Accept any client key without validation *(dev / trusted LAN only)*. |
 
+### Gateway → Remote authentication
+
+| Variable | Default | Description |
+|---|---|---|
+| `GATEWAY_SSH_KEY_PATH` | — | Path to the private key used to authenticate to the remote server. |
+| `GATEWAY_SSH_KEY_CONTENT` | — | Base64-encoded private key (alternative to the file path). |
+
 ### SSH server
 
 | Variable | Default | Description |
@@ -84,17 +91,17 @@ All settings can be provided as environment variables, a YAML file (`--config co
 ## Authentication flow
 
 ```
-1. Client:   ssh -A -p 2222 alice@gateway
+1. Client:   ssh -p 2222 alice@gateway
              │
              │  SSH public-key auth
              ▼
 2. Gateway:  Validates key against GATEWAY_AUTHORIZED_KEYS_PATH
              (or accepts any key and delegates to remote if unset)
              │
-             │  Agent forwarding: client's SSH agent is passed through
+             │  Gateway uses its own key (GATEWAY_SSH_KEY_PATH)
              ▼
 3. Gateway:  asyncssh connects to REMOTE_HOST as user "alice"
-             using the forwarded agent for authentication
+             using the gateway's private key
              │
              │  mosh-server started on remote via SSH
              ▼
@@ -105,7 +112,7 @@ All settings can be provided as environment variables, a YAML file (`--config co
 5. Client:   Interactive session, MOSH-resilient over the WAN leg
 ```
 
-The gateway never holds private keys. The SSH login username becomes the remote username.
+The gateway holds one key for the remote; clients need no special flags. The SSH login username becomes the remote username.
 
 ---
 
@@ -115,7 +122,7 @@ The gateway never holds private keys. The SSH login username becomes the remote 
 
 **Remote server:** `mosh-server` installed and reachable via SSH
 
-**Client:** Any SSH client with agent forwarding (`ssh -A`)
+**Client:** Any standard SSH client
 
 ---
 
@@ -131,6 +138,7 @@ Mount your key material into `/keys/`:
 
 ```
 keys/
-  authorized_keys   ← public keys of clients allowed to connect to the gateway
+  id_ed25519        ← gateway's private key (must be in authorized_keys on remote)
+  authorized_keys   ← (optional) public keys of clients allowed to connect to the gateway
   known_hosts       ← (optional) pin the remote server's host key
 ```

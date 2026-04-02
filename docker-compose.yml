@@ -32,10 +32,12 @@ services:
 
       GATEWAY_HOST_KEY_PATH: "/etc/gateway/host_key"
 
-      # ── Gateway → Remote auth (agent pass-through) ─────────────────
-      # No key files needed — the client's SSH agent is forwarded.
-      # Client must connect with:  ssh -A -p 2222 alice@<gateway-host>
-      #
+      # ── Gateway → Remote auth ─────────────────────────────────────
+      # Place the gateway's private key in ./keys/id_ed25519
+      # (public key must be in authorized_keys on the remote server)
+      GATEWAY_SSH_KEY_PATH: "/keys/id_ed25519"
+      # GATEWAY_SSH_KEY_CONTENT: "<base64-encoded-private-key>"  # alternative
+
       # Remote host-key verification:
       # REMOTE_KNOWN_HOSTS: "/keys/known_hosts"   # recommended in production
       # REMOTE_IGNORE_HOST_KEY: "true"            # insecure — dev only

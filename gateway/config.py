@@ -40,10 +40,10 @@ class GatewayConfig:
     GATEWAY_PASSWORD_AUTH           "true" to also allow password authentication
     GATEWAY_PASSWORDS               Comma-separated user:password pairs
 
-    Gateway → Remote authentication (agent pass-through)
-    -----------------------------------------------------
-    The client's SSH agent is forwarded and used to authenticate to the
-    fixed remote server.  Connect with:  ssh -A user@gateway -p 2222
+    Gateway → Remote authentication
+    --------------------------------
+    GATEWAY_SSH_KEY_PATH            Path to the private key used to authenticate to the remote
+    GATEWAY_SSH_KEY_CONTENT         Base64-encoded private key (alternative to a file path)
 
     SSH server settings
     -------------------
@@ -75,6 +75,9 @@ class GatewayConfig:
         # Fixed remote target (required)
         remote_host: Optional[str] = None,
         remote_port: int = 22,
+        # Gateway → Remote key
+        gateway_ssh_key_path: Optional[str] = None,
+        gateway_ssh_key_content: Optional[str] = None,
         # Remote host-key verification
         remote_known_hosts: Optional[str] = None,
         remote_ignore_host_key: bool = False,
@@ -92,11 +95,17 @@ class GatewayConfig:
         self.remote_host = remote_host
         self.remote_port = remote_port
 
+        self.gateway_ssh_key_path = gateway_ssh_key_path
+        self.gateway_ssh_key_content = gateway_ssh_key_content
+
         self.remote_known_hosts = remote_known_hosts
         self.remote_ignore_host_key = remote_ignore_host_key
 
         self._effective_authorized_keys: Optional[str] = None
+        self._effective_ssh_key: Optional[str] = None  # path or None
+        self._tmp_key_file: Optional[str] = None
         self._load_authorized_keys()
+        self._load_gateway_key()
         self._validate()
 
     # ------------------------------------------------------------------
@@ -136,6 +145,23 @@ class GatewayConfig:
     # ------------------------------------------------------------------
     # Key loading
     # ------------------------------------------------------------------
+
+    def _load_gateway_key(self) -> None:
+        import base64, stat, tempfile
+        if self.gateway_ssh_key_content and not self.gateway_ssh_key_path:
+            key_bytes = base64.b64decode(self.gateway_ssh_key_content)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_gw_key", mode="wb")
+            tmp.write(key_bytes)
+            tmp.close()
+            os.chmod(tmp.name, stat.S_IRUSR | stat.S_IWUSR)
+            self._tmp_key_file = tmp.name
+            self._effective_ssh_key = tmp.name
+        else:
+            self._effective_ssh_key = self.gateway_ssh_key_path
+
+    @property
+    def effective_ssh_key(self) -> Optional[str]:
+        return self._effective_ssh_key
 
     def _load_authorized_keys(self) -> None:
         if self.authorized_keys_content:
@@ -179,6 +205,8 @@ class GatewayConfig:
             passwords=passwords,
             remote_host=os.environ.get("REMOTE_HOST"),
             remote_port=int(os.environ.get("REMOTE_PORT", "22")),
+            gateway_ssh_key_path=os.environ.get("GATEWAY_SSH_KEY_PATH"),
+            gateway_ssh_key_content=os.environ.get("GATEWAY_SSH_KEY_CONTENT"),
             remote_known_hosts=os.environ.get("REMOTE_KNOWN_HOSTS"),
             remote_ignore_host_key=os.environ.get("REMOTE_IGNORE_HOST_KEY", "").lower() in ("1", "true", "yes"),
         )

@@ -7,8 +7,8 @@
 # cannot connect to arbitrary hosts through this gateway.
 #
 # The SSH login username becomes the remote username.
-# Authentication to the remote is passed through via the client's SSH agent.
-# Always connect with:  ssh -A user@gateway -p 2222
+# The gateway authenticates to the remote with its own key (GATEWAY_SSH_KEY_PATH).
+# Clients connect with a plain:  ssh user@gateway -p 2222
 
 # ── SSH server (local clients → gateway) ─────────────────────────────────────
 host: "0.0.0.0"
@@ -17,10 +17,8 @@ host_key_path: "/etc/gateway/host_key"   # auto-generated if missing
 
 # ── Client → Gateway authentication ──────────────────────────────────────────
 #
-# Option A: no authorized_keys configured  (zero-config, recommended default)
-#   The gateway accepts any client public key and delegates auth to the remote:
-#   the client's forwarded agent must satisfy the remote server's authorized_keys.
-#   No separate key management on the gateway needed.
+# Option A: no authorized_keys configured  (zero-config)
+#   The gateway accepts any client public key; the remote is the effective gate.
 #
 # Option B: local authorized_keys file  (pre-screen before hitting the remote)
 # authorized_keys_path: "/keys/authorized_keys"
@@ -42,6 +40,12 @@ host_key_path: "/etc/gateway/host_key"   # auto-generated if missing
 # ── Fixed remote MOSH target  (REQUIRED) ─────────────────────────────────────
 remote_host: "my-server.example.com"    # required — only host clients can reach
 remote_port: 22
+
+# ── Gateway → Remote authentication ──────────────────────────────────────────
+# Private key the gateway uses to authenticate to the remote server.
+# The corresponding public key must be in authorized_keys on the remote.
+gateway_ssh_key_path: "/keys/id_ed25519"
+# gateway_ssh_key_content: "<base64-encoded-private-key>"  # alternative to file
 
 # ── Remote host-key verification ─────────────────────────────────────────────
 # remote_known_hosts: "/keys/known_hosts"    # recommended: pin the remote host key
