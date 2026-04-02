@@ -1,10 +1,7 @@
 """Configuration loading from environment variables or YAML."""
 
-import base64
 import logging
 import os
-import stat
-import tempfile
 from typing import Optional
 
 import yaml
@@ -16,8 +13,6 @@ class GatewayConfig:
     """
     All settings for the SSH↔MOSH gateway.
 
-    Priority: explicit kwargs > environment variables > defaults.
-
     Client → Gateway authentication
     --------------------------------
     GATEWAY_AUTHORIZED_KEYS_PATH   Path to an authorized_keys file
@@ -26,10 +21,13 @@ class GatewayConfig:
     GATEWAY_PASSWORD_AUTH          "true" to also allow password authentication
     GATEWAY_PASSWORDS              Comma-separated user:password pairs, e.g. "alice:s3cr3t,bob:pass"
 
-    Gateway → Remote authentication
-    --------------------------------
-    GATEWAY_SSH_KEY_PATH           Path to the private key used when SSHing to remote
-    GATEWAY_SSH_KEY_CONTENT        Base64-encoded private key (alternative to file path)
+    Gateway → Remote authentication (agent pass-through)
+    -----------------------------------------------------
+    Authentication is passed through from the local SSH client via SSH agent
+    forwarding.  Connect with:  ssh -A user@gateway -p 2222
+
+    The SSH username used to connect to the gateway becomes the remote username.
+    Dynamic host: ssh -A "user@remote-host"@gateway -p 2222
 
     SSH server settings
     -------------------
@@ -39,9 +37,12 @@ class GatewayConfig:
 
     Remote MOSH target
     ------------------
-    REMOTE_HOST                    Default remote host to MOSH into
+    REMOTE_HOST                    Default remote host to MOSH into (required unless using
+                                   dynamic routing via "user@host" SSH usernames)
     REMOTE_PORT                    Default remote SSH port (default: 22)
-    REMOTE_USER                    Default remote username (falls back to SSH login name)
+    REMOTE_KNOWN_HOSTS             Path to a known_hosts file for verifying the remote host key.
+                                   Defaults to the system known_hosts (~/.ssh/known_hosts).
+    REMOTE_IGNORE_HOST_KEY         "true" to skip remote host-key verification (insecure)
     """
 
     def __init__(
@@ -59,10 +60,9 @@ class GatewayConfig:
         # Remote target
         default_remote_host: Optional[str] = None,
         default_remote_port: int = 22,
-        default_remote_user: Optional[str] = None,
-        # Gateway→Remote key
-        gateway_ssh_key_path: Optional[str] = None,
-        gateway_ssh_key_content: Optional[str] = None,
+        # Remote host-key verification
+        remote_known_hosts: Optional[str] = None,
+        remote_ignore_host_key: bool = False,
     ):
         self.host = host
         self.port = port
@@ -76,37 +76,18 @@ class GatewayConfig:
 
         self.default_remote_host = default_remote_host
         self.default_remote_port = default_remote_port
-        self.default_remote_user = default_remote_user
 
-        self.gateway_ssh_key_path = gateway_ssh_key_path
-        self.gateway_ssh_key_content = gateway_ssh_key_content
+        self.remote_known_hosts = remote_known_hosts
+        self.remote_ignore_host_key = remote_ignore_host_key
 
-        # Resolved at init time
-        self._effective_key_path: Optional[str] = None
         self._effective_authorized_keys: Optional[str] = None
-        self._tmp_key_file: Optional[str] = None
-
-        self._resolve()
+        self._load_authorized_keys()
 
     # ------------------------------------------------------------------
-    # Resolution
+    # Key loading
     # ------------------------------------------------------------------
 
-    def _resolve(self):
-        """Materialise key content → temp file, load authorized_keys text."""
-        # Gateway→Remote SSH key
-        if self.gateway_ssh_key_content and not self.gateway_ssh_key_path:
-            key_bytes = base64.b64decode(self.gateway_ssh_key_content)
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix="_gw_key", mode="wb")
-            tmp.write(key_bytes)
-            tmp.close()
-            os.chmod(tmp.name, stat.S_IRUSR | stat.S_IWUSR)
-            self._tmp_key_file = tmp.name
-            self._effective_key_path = tmp.name
-        else:
-            self._effective_key_path = self.gateway_ssh_key_path
-
-        # Authorized keys
+    def _load_authorized_keys(self) -> None:
         if self.authorized_keys_content:
             self._effective_authorized_keys = self.authorized_keys_content
         elif self.authorized_keys_path:
@@ -115,10 +96,6 @@ class GatewayConfig:
                     self._effective_authorized_keys = fh.read()
             except OSError as exc:
                 logger.warning("Cannot read authorized_keys %s: %s", self.authorized_keys_path, exc)
-
-    @property
-    def effective_ssh_key_path(self) -> Optional[str]:
-        return self._effective_key_path
 
     @property
     def effective_authorized_keys(self) -> Optional[str]:
@@ -150,34 +127,33 @@ class GatewayConfig:
             passwords=passwords,
             default_remote_host=os.environ.get("REMOTE_HOST"),
             default_remote_port=int(os.environ.get("REMOTE_PORT", "22")),
-            default_remote_user=os.environ.get("REMOTE_USER"),
-            gateway_ssh_key_path=os.environ.get("GATEWAY_SSH_KEY_PATH"),
-            gateway_ssh_key_content=os.environ.get("GATEWAY_SSH_KEY_CONTENT"),
+            remote_known_hosts=os.environ.get("REMOTE_KNOWN_HOSTS"),
+            remote_ignore_host_key=os.environ.get("REMOTE_IGNORE_HOST_KEY", "").lower() in ("1", "true", "yes"),
         )
 
     @classmethod
     def from_yaml(cls, path: str) -> "GatewayConfig":
         with open(path) as fh:
             data = yaml.safe_load(fh) or {}
-        # Strip leading underscores (private fields) just in case
         return cls(**{k: v for k, v in data.items() if not k.startswith("_")})
 
     def parse_destination(self, ssh_username: str) -> tuple:
         """
-        Derive (remote_user, remote_host, remote_port) from the SSH login username.
+        Derive ``(remote_user, remote_host, remote_port)`` from the SSH login username.
 
-        Supported formats:
-          alice               → (alice or REMOTE_USER,  REMOTE_HOST, REMOTE_PORT)
-          alice@10.0.0.1      → (alice,                 10.0.0.1,   REMOTE_PORT)
-          alice@10.0.0.1:22   → (alice,                 10.0.0.1,   22)
+        The SSH username IS the remote username.  Supported formats:
+
+          alice               → alice  @  REMOTE_HOST  :  REMOTE_PORT
+          alice@10.0.0.1      → alice  @  10.0.0.1     :  REMOTE_PORT
+          alice@10.0.0.1:22   → alice  @  10.0.0.1     :  22
         """
-        remote_user = self.default_remote_user or ssh_username
+        remote_user = ssh_username
         remote_host = self.default_remote_host
         remote_port = self.default_remote_port
 
         if "@" in ssh_username:
             user_part, host_part = ssh_username.split("@", 1)
-            remote_user = user_part or remote_user
+            remote_user = user_part
             if ":" in host_part:
                 h, p = host_part.rsplit(":", 1)
                 remote_host = h
@@ -190,8 +166,10 @@ class GatewayConfig:
 
         if not remote_host:
             raise ValueError(
-                "No remote host configured. Set REMOTE_HOST or use SSH username "
+                "No remote host configured.  Set REMOTE_HOST or use SSH username "
                 "format 'remoteuser@remotehost'."
             )
+        if not remote_user:
+            raise ValueError("Could not determine remote username from SSH login.")
 
         return remote_user, remote_host, remote_port

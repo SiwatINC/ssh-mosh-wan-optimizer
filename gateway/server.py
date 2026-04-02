@@ -2,13 +2,17 @@
 AsyncSSH server that accepts local SSH client connections and bridges them
 to remote servers via MOSH.
 
-Authentication modes supported (Client → Gateway):
-  • Public key  – authorized_keys file or inline content  (recommended)
-  • Password    – user:password pairs in config           (optional)
-  • Accept-any  – skip validation                         (dev / trusted LAN only)
+Authentication pass-through model
+----------------------------------
+  • The SSH login username becomes the remote username.
+  • The client's SSH agent is forwarded and used to authenticate to the
+    remote server — the gateway holds no keys of its own.
+  • Connect from your local machine with:  ssh -A user@gateway -p 2222
 
-Authentication mode used (Gateway → Remote):
-  • SSH private key configured via GATEWAY_SSH_KEY_PATH / GATEWAY_SSH_KEY_CONTENT
+Client → Gateway authentication modes (pick one):
+  • Public key  (authorized_keys file or inline content)  — recommended
+  • Password    (user:password pairs in config)
+  • Accept-any  (skip validation)                         — dev / trusted LAN only
 """
 
 import asyncio
@@ -50,13 +54,9 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     # ------------------------------------------------------------------
 
     def begin_auth(self, username: str) -> bool:
-        """Return False to skip auth entirely (not recommended)."""
-        if self._config.accept_any_key and not self._config.password_auth:
-            # Still go through auth so the username is set, but auto-approve below.
-            return True
-        return True
+        return True  # always require authentication
 
-    # --- Public key auth ---
+    # --- Public key ---
 
     def public_key_auth_supported(self) -> bool:
         return True
@@ -72,23 +72,23 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         auth_keys_text = self._config.effective_authorized_keys
         if not auth_keys_text:
             logger.warning(
-                "No authorized_keys configured; rejecting key auth for '%s'", username
+                "No authorized_keys configured; rejecting public-key auth for '%s'", username
             )
             return False
 
         try:
             auth_keys = asyncssh.import_authorized_keys(auth_keys_text)
-            result = auth_keys.validate(key, username)
-            if result is None:
+            # validate() returns None on success, an exception reason string on failure
+            if auth_keys.validate(key, username) is None:
                 logger.info("Public key accepted for '%s'", username)
                 return True
-            logger.info("Public key rejected for '%s'", username)
-            return False
         except Exception as exc:
             logger.error("Error validating public key for '%s': %s", username, exc)
-            return False
 
-    # --- Password auth ---
+        logger.info("Public key rejected for '%s'", username)
+        return False
+
+    # --- Password ---
 
     def password_auth_supported(self) -> bool:
         return self._config.password_auth
@@ -124,16 +124,16 @@ async def run_gateway(config: GatewayConfig) -> None:
         try:
             remote_user, remote_host, remote_port = config.parse_destination(ssh_username)
         except ValueError as exc:
-            # We can't raise from here cleanly; the session will handle the error
-            # by trying with empty host and failing in bootstrap.
-            logger.error("Destination parse error: %s", exc)
+            logger.error("Destination parse error for '%s': %s", ssh_username, exc)
+            # Return a session that will immediately report the error
             remote_user, remote_host, remote_port = ssh_username, "", config.default_remote_port
 
         return GatewaySession(
             remote_host=remote_host,
             remote_user=remote_user,
             remote_port=remote_port,
-            ssh_key_path=config.effective_ssh_key_path,
+            known_hosts=config.remote_known_hosts,
+            ignore_host_key=config.remote_ignore_host_key,
         )
 
     host_key = _ensure_host_key(config.host_key_path)
@@ -143,29 +143,25 @@ async def run_gateway(config: GatewayConfig) -> None:
         host=config.host,
         port=config.port,
         server_host_keys=[host_key],
-        # Use raw bytes in sessions (no implicit encoding)
-        encoding=None,
+        encoding=None,          # raw bytes in sessions
+        agent_forwarding=True,  # tell asyncssh to handle agent-forwarding requests
     )
 
+    logger.info("SSH↔MOSH gateway listening on %s:%d", config.host, config.port)
     logger.info(
-        "SSH↔MOSH gateway listening on %s:%d", config.host, config.port
+        "Authentication: passed through via client SSH agent (ssh -A ...)"
     )
     if config.default_remote_host:
-        logger.info(
-            "Default target: %s@%s:%d",
-            config.default_remote_user or "<login-user>",
-            config.default_remote_host,
-            config.default_remote_port,
-        )
+        logger.info("Default target: *@%s:%d", config.default_remote_host, config.default_remote_port)
     else:
-        logger.info("Dynamic routing: SSH username format 'remoteuser@remotehost'")
+        logger.info("Dynamic routing: SSH username format 'user@remotehost[:port]'")
 
     async with server:
         await asyncio.get_event_loop().create_future()  # run forever
 
 
 def _ensure_host_key(path: str) -> asyncssh.SSHKey:
-    """Load existing host key or generate a new ed25519 one."""
+    """Load the existing host key or generate a new ed25519 one."""
     if os.path.exists(path):
         return asyncssh.read_private_key(path)
 

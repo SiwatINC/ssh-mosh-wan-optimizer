@@ -1,10 +1,16 @@
 # SSH ↔ MOSH WAN Gateway — example configuration
 # Copy to config.yaml and adjust; or use environment variables instead.
+#
+# Authentication model
+# --------------------
+# The SSH login username IS the remote username — no separate remote_user setting.
+# Authentication to the remote server is passed through from the local SSH client
+# via SSH agent forwarding.  Always connect with:  ssh -A user@gateway -p 2222
 
 # ── SSH server (local clients → gateway) ─────────────────────────────────────
-host: "0.0.0.0"          # Bind address
-port: 2222                # SSH listen port
-host_key_path: "/etc/gateway/host_key"   # Auto-generated if missing
+host: "0.0.0.0"
+port: 2222
+host_key_path: "/etc/gateway/host_key"   # auto-generated if missing
 
 # ── Client → Gateway authentication ──────────────────────────────────────────
 
@@ -22,22 +28,24 @@ authorized_keys_path: "/keys/authorized_keys"
 #   alice: "s3cr3t"
 #   bob: "p4ssw0rd"
 
-# Dev / trusted-LAN only: accept any client key without validation
+# Dev / trusted-LAN only
 # accept_any_key: false
 
 # ── Remote MOSH target ────────────────────────────────────────────────────────
-# Fixed target for all clients:
+# Fixed target (same remote host for all clients):
 default_remote_host: "my-server.example.com"
 default_remote_port: 22
-default_remote_user: ""   # Leave blank to use the SSH login username as remote user
 
-# Dynamic routing: leave default_remote_host blank and connect as:
-#   ssh "remoteuser@remotehost"@gateway -p 2222
-#   ssh "remoteuser@remotehost:2222"@gateway -p 2222
+# Dynamic routing: leave default_remote_host blank and use SSH username format:
+#   ssh -A -p 2222 "alice@10.0.0.1"@gateway
+#   ssh -A -p 2222 "alice@10.0.0.1:22"@gateway
 
 # ── Gateway → Remote authentication ──────────────────────────────────────────
-# The private key the gateway uses to SSH into the remote server.
-gateway_ssh_key_path: "/keys/id_ed25519"
+# No key configuration required.
+# The client's SSH agent is forwarded through the gateway to the remote server.
+# Ensure the client connects with agent forwarding:  ssh -A ...
 
-# Alternative: supply key as base64 (useful for Docker secrets / env vars)
-# gateway_ssh_key_content: "<base64-encoded-private-key>"
+# ── Remote host-key verification ─────────────────────────────────────────────
+# remote_known_hosts: "/keys/known_hosts"   # path to a known_hosts file
+#                                            # default: system ~/.ssh/known_hosts
+# remote_ignore_host_key: false             # true = skip verification (insecure)

@@ -7,34 +7,40 @@ services:
     # build: .
     restart: unless-stopped
     ports:
-      - "2222:2222"         # SSH listen port (change left side to remap on host)
+      - "2222:2222"             # SSH listen port
     volumes:
-      - ./keys:/keys:ro     # Mount your key material here (see README)
-      - gateway-hostkey:/etc/gateway  # Persist the generated host key
+      - ./keys:/keys:ro         # Mount your authorized_keys here (see below)
+      - gateway-hostkey:/etc/gateway  # Persist the generated server host key
     environment:
       # ── Remote target ──────────────────────────────────────────────
       REMOTE_HOST: "my-remote-server.example.com"   # required
       REMOTE_PORT: "22"
-      REMOTE_USER: ""        # leave blank to use the SSH login username
-
-      # ── Gateway → Remote auth ──────────────────────────────────────
-      GATEWAY_SSH_KEY_PATH: "/keys/id_ed25519"      # private key for remote auth
+      # No REMOTE_USER — the SSH login username becomes the remote username
 
       # ── Client → Gateway auth ──────────────────────────────────────
       # Option A: authorized_keys file (recommended)
+      #   Place your public key(s) in ./keys/authorized_keys
       GATEWAY_AUTHORIZED_KEYS_PATH: "/keys/authorized_keys"
 
-      # Option B: inline authorized_keys (newline-separated, set as secret)
+      # Option B: inline authorized_keys text
       # GATEWAY_AUTHORIZED_KEYS_CONTENT: "ssh-ed25519 AAAA... user@host"
 
-      # Option C: password auth (also set GATEWAY_PASSWORDS below)
+      # Option C: password auth
       # GATEWAY_PASSWORD_AUTH: "true"
       # GATEWAY_PASSWORDS: "alice:s3cr3t,bob:p4ss"
 
-      # ── Dev / trusted-LAN only ─────────────────────────────────────
+      # Dev / trusted-LAN: skip client-key validation
       # GATEWAY_ACCEPT_ANY_KEY: "true"
 
       GATEWAY_HOST_KEY_PATH: "/etc/gateway/host_key"
+
+      # ── Gateway → Remote auth (agent pass-through) ─────────────────
+      # No key files needed — the client's SSH agent is forwarded.
+      # Connect with:  ssh -A -p 2222 alice@<gateway-host>
+      #
+      # Remote host-key verification (optional):
+      # REMOTE_KNOWN_HOSTS: "/keys/known_hosts"   # verify remote host key
+      # REMOTE_IGNORE_HOST_KEY: "true"            # skip verification (insecure)
 
 volumes:
   gateway-hostkey:
